@@ -1574,7 +1574,7 @@ export default function Chat() {
   }
 
   return (
-    <div className="relative flex h-svh flex-col bg-white">
+    <div className="relative flex h-svh flex-col bg-white pb-[72px]">
       {/* Voice mode overlay */}
       {renderVoiceModeOverlay()}
 
@@ -1733,8 +1733,8 @@ export default function Chat() {
         )}
       </div>
 
-      {/* Input bar - optimized for one-handed use */}
-      <div className="shrink-0 border-t border-gray-200 bg-white px-3 py-3">
+      {/* Input bar - fixed at bottom with safe area */}
+      <div className="fixed bottom-0 left-0 right-0 border-t border-gray-200 bg-white px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         <div className="flex items-end gap-3">
           {/* Voice button - large 56px touch target */}
           <button

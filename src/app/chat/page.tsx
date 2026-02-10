@@ -1574,7 +1574,7 @@ export default function Chat() {
   }
 
   return (
-    <div className="relative flex h-svh flex-col bg-white pb-[72px]">
+    <div className="relative flex flex-col bg-white overflow-hidden" style={{ height: "100dvh" }}>
       {/* Voice mode overlay */}
       {renderVoiceModeOverlay()}
 
@@ -1591,7 +1591,7 @@ export default function Chat() {
       {renderSuccessModal()}
 
       {/* Top nav */}
-      <header className="flex shrink-0 items-center justify-between border-b border-gray-200 px-4 py-3">
+      <header className="flex shrink-0 items-center justify-between border-b border-gray-200 bg-white px-4 py-3 z-10">
         <button
           onClick={() => setMenuOpen(true)}
           className="flex h-11 w-11 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 active:bg-gray-200"
@@ -1613,8 +1613,8 @@ export default function Chat() {
         </a>
       </header>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4">
+      {/* Messages - scrollable area */}
+      <div className="flex-1 overflow-y-auto px-4 py-4 pb-24" style={{ WebkitOverflowScrolling: "touch" }}>
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center px-6">
             {/* Large voice button for empty state - primary action */}
@@ -1734,7 +1734,7 @@ export default function Chat() {
       </div>
 
       {/* Input bar - fixed at bottom with safe area */}
-      <div className="fixed bottom-0 left-0 right-0 border-t border-gray-200 bg-white px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-gray-200 bg-white px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         <div className="flex items-end gap-3">
           {/* Voice button - large 56px touch target */}
           <button

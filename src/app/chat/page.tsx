@@ -971,10 +971,11 @@ export default function Chat() {
         clearTimeout(silenceTimerRef.current);
       }
 
-      // If we have final transcript, process immediately
-      if (finalTranscript.trim()) {
+      // If we have final transcript and not already processing, process immediately
+      if (finalTranscript.trim() && !isProcessingRef.current) {
         isProcessingRef.current = true;
         setInterimTranscript("");
+        currentTranscriptRef.current = "";
         processVoiceInput(finalTranscript.trim());
         return;
       }
@@ -1072,7 +1073,13 @@ export default function Chat() {
       }
 
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
         mediaStreamRef.current = stream;
       } catch {
         alert("Microphone access required. Please allow and try again.");
@@ -1614,7 +1621,7 @@ export default function Chat() {
       </header>
 
       {/* Messages - scrollable area */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 pb-24" style={{ WebkitOverflowScrolling: "touch" }}>
+      <div className="flex-1 overflow-y-scroll overscroll-contain touch-pan-y px-4 py-4 pb-24" style={{ WebkitOverflowScrolling: "touch" }}>
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center px-6">
             {/* Large voice button for empty state - primary action */}

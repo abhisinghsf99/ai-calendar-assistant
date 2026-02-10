@@ -807,6 +807,8 @@ REMEMBER: Be terse. One question. Short responses. Get to the point.`;
     if (parsed.action === "delete" && parsed.deleteSearch) {
       const { searchTerm, date, time, timeRangeStart, timeRangeEnd, needsClarification } = parsed.deleteSearch;
 
+      console.log("[Delete] Search params:", { searchTerm, date, time, timeRangeStart, timeRangeEnd, needsClarification });
+
       // If AI is asking for clarification, return the message without searching
       if (needsClarification) {
         return NextResponse.json({
@@ -842,7 +844,7 @@ REMEMBER: Be terse. One question. Short responses. Get to the point.`;
       const tzOffset = isDST ? "-07:00" : "-08:00";
 
       if (date) {
-        // Search specific date
+        // Search specific date with 4-hour buffer on each side (in case of timezone edge cases)
         timeMin = `${date}T00:00:00${tzOffset}`;
         timeMax = `${date}T23:59:59${tzOffset}`;
       } else {
@@ -858,10 +860,7 @@ REMEMBER: Be terse. One question. Short responses. Get to the point.`;
         timeMax = `${formatDate(future)}T23:59:59${tzOffset}`;
       }
 
-      // Time filters
-      const filterTime = time; // e.g., "13:00" - specific time
-      const filterTimeRangeStart = timeRangeStart; // e.g., "12:00" - range start
-      const filterTimeRangeEnd = timeRangeEnd; // e.g., "17:00" - range end
+      console.log("[Delete] Date range:", { timeMin, timeMax });
 
       const calendarsToSearch: CalendarInfo[] = activeCalendars.length > 0
         ? activeCalendars
@@ -914,45 +913,117 @@ REMEMBER: Be terse. One question. Short responses. Get to the point.`;
         const allEventsArrays = await Promise.all(fetchPromises);
         let events: CalendarEvent[] = allEventsArrays.flat();
 
-        // Filter by search term if provided
+        console.log("[Delete] All events fetched:", events.map(e => ({
+          id: e.id,
+          title: e.title,
+          start: e.start,
+        })));
+
+        // Helper: Get event time in LA timezone as minutes from midnight
+        const getEventMinutesLA = (eventStart: string): number | null => {
+          if (!eventStart.includes("T")) return null; // All-day event
+          const eventDate = new Date(eventStart);
+          // Get hours and minutes in LA timezone
+          const timeStr = eventDate.toLocaleTimeString("en-US", {
+            hour12: false,
+            hour: "2-digit",
+            minute: "2-digit",
+            timeZone: "America/Los_Angeles",
+          });
+          const [hours, minutes] = timeStr.split(":").map(Number);
+          return hours * 60 + minutes;
+        };
+
+        // Store all events for "no match" fallback
+        const allEventsOnDate = date ? [...events] : [];
+
+        // Filter by search term if provided (case-insensitive partial match)
         if (searchTerm) {
           const searchLower = searchTerm.toLowerCase();
-          events = events.filter(e =>
-            e.title.toLowerCase().includes(searchLower)
-          );
+          // Split search term into words for flexible matching
+          const searchWords = searchLower.split(/\s+/).filter(w => w.length > 0);
+
+          events = events.filter(e => {
+            const titleLower = e.title.toLowerCase();
+            // Match if ANY search word is found in title
+            return searchWords.some(word => titleLower.includes(word));
+          });
+
+          console.log("[Delete] After title filter:", events.map(e => e.title));
         }
 
-        // Filter by specific time if provided
-        if (filterTime) {
-          const [filterHour, filterMin] = filterTime.split(":").map(Number);
+        // Filter by time if provided (use 4-hour window, find closest match)
+        let targetMinutes: number | null = null;
+        if (time) {
+          const [filterHour, filterMin] = time.split(":").map(Number);
+          targetMinutes = filterHour * 60 + filterMin;
+
+          // Filter to events within 4-hour window (240 minutes)
+          const WINDOW_MINUTES = 240;
           events = events.filter(e => {
-            if (!e.start.includes("T")) return false; // Skip all-day events
-            const eventDate = new Date(e.start);
-            const eventHour = eventDate.getHours();
-            const eventMin = eventDate.getMinutes();
-            // Match within the same hour (allow some flexibility)
-            return eventHour === filterHour && Math.abs(eventMin - filterMin) <= 30;
+            const eventMinutes = getEventMinutesLA(e.start);
+            if (eventMinutes === null) return false; // Skip all-day events
+            const diff = Math.abs(eventMinutes - targetMinutes!);
+            return diff <= WINDOW_MINUTES;
           });
+
+          console.log("[Delete] After time filter (4hr window):", events.map(e => ({
+            title: e.title,
+            start: e.start,
+            minutes: getEventMinutesLA(e.start),
+          })));
         }
 
         // Filter by time range if provided
-        if (filterTimeRangeStart && filterTimeRangeEnd) {
-          const [startHour, startMin] = filterTimeRangeStart.split(":").map(Number);
-          const [endHour, endMin] = filterTimeRangeEnd.split(":").map(Number);
+        if (timeRangeStart && timeRangeEnd) {
+          const [startHour, startMin] = timeRangeStart.split(":").map(Number);
+          const [endHour, endMin] = timeRangeEnd.split(":").map(Number);
           const rangeStartMinutes = startHour * 60 + startMin;
           const rangeEndMinutes = endHour * 60 + endMin;
 
           events = events.filter(e => {
-            if (!e.start.includes("T")) return false; // Skip all-day events
-            const eventDate = new Date(e.start);
-            const eventMinutes = eventDate.getHours() * 60 + eventDate.getMinutes();
+            const eventMinutes = getEventMinutesLA(e.start);
+            if (eventMinutes === null) return false; // Skip all-day events
             return eventMinutes >= rangeStartMinutes && eventMinutes <= rangeEndMinutes;
           });
         }
 
+        // If we have matches and a target time, sort by closest to target time
+        if (events.length > 1 && targetMinutes !== null) {
+          events.sort((a, b) => {
+            const aMin = getEventMinutesLA(a.start) ?? 0;
+            const bMin = getEventMinutesLA(b.start) ?? 0;
+            return Math.abs(aMin - targetMinutes!) - Math.abs(bMin - targetMinutes!);
+          });
+          console.log("[Delete] Sorted by closest to target time:", events.map(e => e.title));
+        }
+
         if (events.length === 0) {
+          // No match found - show what events ARE on that day
+          if (allEventsOnDate.length > 0) {
+            const eventsList = allEventsOnDate.slice(0, 5).map(e => {
+              const timeStr = e.start.includes("T")
+                ? new Date(e.start).toLocaleTimeString("en-US", {
+                    hour: "numeric",
+                    minute: "2-digit",
+                    hour12: true,
+                    timeZone: "America/Los_Angeles",
+                  })
+                : "all day";
+              return `• ${e.title} at ${timeStr}`;
+            }).join("\n");
+
+            return NextResponse.json({
+              message: `I couldn't find that appointment. Here's what you have that day:\n\n${eventsList}\n\nWhich one did you mean?`,
+              speech: "I couldn't find that appointment. Which one did you mean?",
+              action: "none",
+              appointment: null,
+              readRange: null,
+            });
+          }
+
           return NextResponse.json({
-            message: "I couldn't find any appointments matching that. Can you give me more details like the exact time or what the appointment is for?",
+            message: "I couldn't find any appointments matching that. Can you give me more details?",
             speech: "I couldn't find that appointment. Can you give me more details?",
             action: "none",
             appointment: null,
@@ -966,6 +1037,7 @@ REMEMBER: Be terse. One question. Short responses. Get to the point.`;
           const evtTime = evt.start.includes('T')
             ? new Date(evt.start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Los_Angeles' })
             : 'all day';
+          console.log("[Delete] Single match found:", { id: evt.id, title: evt.title, time: evtTime });
           return NextResponse.json({
             message: parsed.message,
             speech: `Delete ${evt.title} at ${evtTime}?`,
@@ -976,8 +1048,27 @@ REMEMBER: Be terse. One question. Short responses. Get to the point.`;
           });
         }
 
-        // Multiple matches - return interactive selection
+        // Multiple matches - if searching by time, pick the closest one
+        if (targetMinutes !== null && events.length > 1) {
+          // Already sorted by closest - take the first one
+          const evt = events[0];
+          const evtTime = evt.start.includes('T')
+            ? new Date(evt.start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/Los_Angeles' })
+            : 'all day';
+          console.log("[Delete] Multiple matches, picking closest:", { id: evt.id, title: evt.title, time: evtTime });
+          return NextResponse.json({
+            message: `Delete ${evt.title} at ${evtTime}?`,
+            speech: `Delete ${evt.title} at ${evtTime}?`,
+            action: "delete",
+            appointment: null,
+            readRange: null,
+            deleteEvent: evt,
+          });
+        }
+
+        // Multiple matches without specific time - return interactive selection
         const eventsToShow = events.slice(0, 10);
+        console.log("[Delete] Multiple matches, showing selection:", eventsToShow.map(e => e.title));
 
         return NextResponse.json({
           message: `I found ${events.length} appointment${events.length > 1 ? "s" : ""} matching your request. Select which ones to delete:`,

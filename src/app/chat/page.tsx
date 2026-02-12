@@ -719,11 +719,9 @@ export default function Chat() {
   }, []);
 
   // Speak text using OpenAI TTS API
+  // Temporarily disables mic during playback to prevent echo cancellation from suppressing audio
   const speakText = useCallback(async (text: string): Promise<void> => {
-    console.log("[TTS] speakText called with:", { text: text?.slice(0, 50), isMuted, hasText: !!text?.trim() });
-
-    if (typeof window === "undefined" || isMuted || !text.trim()) {
-      console.log("[TTS] Early return - window:", typeof window, "isMuted:", isMuted, "text empty:", !text?.trim());
+    if (typeof window === "undefined" || !text.trim()) {
       isProcessingRef.current = false;
       return;
     }
@@ -734,10 +732,27 @@ export default function Chat() {
       audioRef.current = null;
     }
 
+    // Helper to disable mic tracks during TTS (prevents echo cancellation from suppressing audio)
+    const disableMicTracks = () => {
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getAudioTracks().forEach(track => {
+          track.enabled = false;
+        });
+      }
+    };
+
+    // Helper to re-enable mic tracks after TTS (only if user hasn't manually muted)
+    const enableMicTracks = () => {
+      if (mediaStreamRef.current && !isMutedRef.current) {
+        mediaStreamRef.current.getAudioTracks().forEach(track => {
+          track.enabled = true;
+        });
+      }
+    };
+
     try {
       setIsSpeaking(true);
       setVoiceStatus("speaking");
-      console.log("[TTS] Fetching audio from /api/tts...");
 
       const response = await fetch("/api/tts", {
         method: "POST",
@@ -745,46 +760,53 @@ export default function Chat() {
         body: JSON.stringify({ text, voice: "nova", speed: 1.05 }),
       });
 
-      console.log("[TTS] API response status:", response.status, response.ok);
       if (!response.ok) throw new Error("TTS failed");
 
       const audioBlob = await response.blob();
-      console.log("[TTS] Got audio blob, size:", audioBlob.size, "type:", audioBlob.type);
       const audioUrl = URL.createObjectURL(audioBlob);
       const audio = new Audio(audioUrl);
       audioRef.current = audio;
 
+      // Disable mic tracks before playing to prevent echo cancellation interference
+      disableMicTracks();
+
       await new Promise<void>((resolve) => {
         audio.onended = () => {
-          console.log("[TTS] Audio ended successfully");
           setIsSpeaking(false);
           URL.revokeObjectURL(audioUrl);
           audioRef.current = null;
+          // Re-enable mic tracks after TTS finishes
+          enableMicTracks();
           resolve();
         };
-        audio.onerror = (e) => {
-          console.error("[TTS] Audio error:", e);
+        audio.onerror = () => {
           setIsSpeaking(false);
           URL.revokeObjectURL(audioUrl);
           audioRef.current = null;
+          // Re-enable mic tracks on error
+          enableMicTracks();
           resolve();
         };
-        console.log("[TTS] Attempting to play audio...");
-        audio.play().then(() => {
-          console.log("[TTS] Audio play() started successfully");
-        }).catch((err) => {
-          console.error("[TTS] Audio play() failed:", err);
+        audio.play().catch(() => {
           setIsSpeaking(false);
           URL.revokeObjectURL(audioUrl);
           audioRef.current = null;
+          // Re-enable mic tracks if play fails
+          enableMicTracks();
           resolve();
         });
       });
     } catch (error) {
-      console.error("[TTS] Error in speakText:", error);
+      console.error("TTS error:", error);
       setIsSpeaking(false);
+      // Re-enable mic tracks on error
+      if (mediaStreamRef.current && !isMutedRef.current) {
+        mediaStreamRef.current.getAudioTracks().forEach(track => {
+          track.enabled = true;
+        });
+      }
     }
-  }, [isMuted]);
+  }, []);
 
   // Process voice input and handle response
   const processVoiceInput = useCallback(async (text: string) => {
@@ -1117,33 +1139,38 @@ export default function Chat() {
     }
   }, [isVoiceMode, initSpeechRecognition, clearAllTimers]);
 
-  // Toggle mute - mutes/unmutes the microphone input
+  // Toggle mute - mutes/unmutes the microphone input (does NOT affect TTS output)
   const toggleMute = useCallback(() => {
     const newMutedState = !isMutedRef.current;
     isMutedRef.current = newMutedState;
-    
+
     if (newMutedState) {
-      // Muting: stop recognition
+      // Muting: stop recognition and disable mic tracks
       if (recognitionRef.current) {
         try { recognitionRef.current.stop(); } catch {}
       }
-      setIsListening(false);
-      
-      // Also pause TTS
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-        setIsSpeaking(false);
+      // Disable mic tracks
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getAudioTracks().forEach(track => {
+          track.enabled = false;
+        });
       }
+      setIsListening(false);
+      // Note: TTS continues playing - user can still hear responses while muted
     } else {
-      // Unmuting: restart recognition if voice mode is active
-      if (voiceModeRef.current && !isProcessingRef.current) {
+      // Unmuting: enable mic tracks and restart recognition if voice mode is active
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getAudioTracks().forEach(track => {
+          track.enabled = true;
+        });
+      }
+      if (voiceModeRef.current && !isProcessingRef.current && !isSpeaking) {
         startListening();
       }
     }
-    
+
     setIsMuted(newMutedState);
-  }, [startListening]);
+  }, [startListening, isSpeaking]);
 
   // Manual stop and process
   const stopAndProcess = useCallback(() => {

@@ -720,7 +720,10 @@ export default function Chat() {
 
   // Speak text using OpenAI TTS API
   const speakText = useCallback(async (text: string): Promise<void> => {
+    console.log("[TTS] speakText called with:", { text: text?.slice(0, 50), isMuted, hasText: !!text?.trim() });
+
     if (typeof window === "undefined" || isMuted || !text.trim()) {
+      console.log("[TTS] Early return - window:", typeof window, "isMuted:", isMuted, "text empty:", !text?.trim());
       isProcessingRef.current = false;
       return;
     }
@@ -734,6 +737,7 @@ export default function Chat() {
     try {
       setIsSpeaking(true);
       setVoiceStatus("speaking");
+      console.log("[TTS] Fetching audio from /api/tts...");
 
       const response = await fetch("/api/tts", {
         method: "POST",
@@ -741,27 +745,35 @@ export default function Chat() {
         body: JSON.stringify({ text, voice: "nova", speed: 1.05 }),
       });
 
+      console.log("[TTS] API response status:", response.status, response.ok);
       if (!response.ok) throw new Error("TTS failed");
 
       const audioBlob = await response.blob();
+      console.log("[TTS] Got audio blob, size:", audioBlob.size, "type:", audioBlob.type);
       const audioUrl = URL.createObjectURL(audioBlob);
       const audio = new Audio(audioUrl);
       audioRef.current = audio;
 
       await new Promise<void>((resolve) => {
         audio.onended = () => {
+          console.log("[TTS] Audio ended successfully");
           setIsSpeaking(false);
           URL.revokeObjectURL(audioUrl);
           audioRef.current = null;
           resolve();
         };
-        audio.onerror = () => {
+        audio.onerror = (e) => {
+          console.error("[TTS] Audio error:", e);
           setIsSpeaking(false);
           URL.revokeObjectURL(audioUrl);
           audioRef.current = null;
           resolve();
         };
-        audio.play().catch(() => {
+        console.log("[TTS] Attempting to play audio...");
+        audio.play().then(() => {
+          console.log("[TTS] Audio play() started successfully");
+        }).catch((err) => {
+          console.error("[TTS] Audio play() failed:", err);
           setIsSpeaking(false);
           URL.revokeObjectURL(audioUrl);
           audioRef.current = null;
@@ -769,7 +781,7 @@ export default function Chat() {
         });
       });
     } catch (error) {
-      console.error("TTS error:", error);
+      console.error("[TTS] Error in speakText:", error);
       setIsSpeaking(false);
     }
   }, [isMuted]);
